@@ -3,7 +3,7 @@
   "id": "superarp",
   "name": "Super Arp",
   "abbrev": "SA",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "builtin": false,
   "capabilities": {
     "chainable": true,
