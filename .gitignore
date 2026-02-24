@@ -6,6 +6,7 @@ dist/
 .backup/
 agentfiles/
 scripts/build-local.sh
+scripts/install-local.sh
 
 # Logs
 *.log

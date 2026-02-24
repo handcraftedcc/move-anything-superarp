@@ -1332,7 +1332,7 @@ static void* superarp_create_instance(const char *module_dir, const char *config
     inst->rhythm_seed = 1;
     inst->progression_trigger_mode = TRIG_RETRIGGER;
     inst->rhythm_trigger_mode = TRIG_RETRIGGER;
-    inst->modifier_loop_length = 0;
+    inst->modifier_loop_length = 16;
     inst->drop_amount = 0;
     inst->drop_seed = 1;
     inst->velocity_random_amount = 0;
