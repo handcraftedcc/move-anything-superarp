@@ -6,75 +6,16 @@ Advanced MIDI arpeggiator module for Ableton Move, built for Move Everything.
 
 Super Arp is a chainable MIDI FX module (`midi_fx`) for Move Everything. It turns held notes into deterministic or randomized arpeggiated phrases, with independent control over timing, note order, rhythm, and variation.
 
-### Global
-
-Global controls define transport/timing behavior and base output characteristics for every generated note.
-
-| Parameter | What it does |
-|---------|--------|
-| `latch` | Holds notes after release when enabled. |
-| `max_voices` | Limits simultaneous output voices (`1-64`), stealing oldest first. |
-| `rate` | Sets arp step division (`1/32`, `1/16`, `1/8`, `1/4`). |
-| `triplet` | Enables triplet timing for step duration. |
-| `swing` | Applies swing amount (`0-100`) to internal timing. |
-| `gate` | Sets note length (`0-1600`), including overlaps beyond one step. |
-| `velocity` | Base velocity override (`0` = as played, `1-127` = fixed base). |
-| `octave_range` | Applies deterministic octave movement (`0`, `+1`, `-1`, `+2`, `-2`). |
-| `sync` | Chooses timing source (`internal` or incoming MIDI `clock`). |
-| `bpm` | Internal tempo (`40-240`) when `sync=internal`. |
-
-### Progression
-
-Progression controls decide which held notes are selected on each trigger step, including ordered, patterned, and seeded random behavior.
-
-| Parameter | What it does |
-|---------|--------|
-| `progression_mode` (`mode`) | Selects note order engine: `up`, `down`, `as_played`, `leap_inward`, `leap_outward`, `chord`, `pattern`, `random_pattern`. |
-| `pattern_preset` (`pattern`) | Selects one of 40 progression presets for `pattern` mode. |
-| `progression_trigger` (`trigger`) | Sets reset policy: `retrigger` or `continuous`. |
-| `missing_note_policy` (`note policy`) | Handles out-of-range pattern indices: `fold`, `wrap`, `clamp`, `skip`. |
-| `progression_seed` (`rand seed`) | Main seed for random progression generation. |
-| `random_pattern_length` (`rand length`) | Sets random pattern length (`1-32`). For random_pattern mode only. |
-| `random_pattern_chords` (`rand chords`) | Increases chord density in random pattern (`0-100`). For random_pattern mode only. |
-| `random_pattern_chord_seed` (`rand ch seed`) | Additional seed used for random chord voicing choices. For random_pattern mode only. |
-
-Pattern notation for progression presets:
-- Numbers (`1`, `2`, `3`, ...) reference held notes sorted by pitch (lowest to highest).
-- `-` separates time steps.
-- Parentheses group simultaneous notes into a chord step, for example `(1-3)`.
-
-### Rhythm
-
-Rhythm controls define trigger/rest pulses that gate progression advancement.
-
-Pattern notation for rhythm presets:
-- `0` means trigger/play a step.
-- `x` means rest/pause (no trigger on that step).
-- Each character is one step in sequence order from left to right.
-
-| Parameter | What it does |
-|---------|--------|
-| `rhythm_preset` (`pattern`) | Selects one of 40 rhythm strings (`0` = trigger, `x` = rest). |
-| `rhythm_trigger` (`trigger`) | Sets rhythm reset policy: `retrigger` or `continuous`. |
-
-### Modifiers
-
-Modifiers add deterministic variation on top of selected notes. Each modifier has independent seeded behavior, and all can follow a shared loop length.
-
-| Parameter | What it does |
-|---------|--------|
-| `modifier_loop_length` (`mod loop`) | Loop length for modifier randomness (`0-128`, `0` = no loop). |
-| `drop_amount` (`drop`) | Probability-like amount to skip triggered steps (`0-100`). |
-| `drop_seed` | Seed for drop decisions. |
-| `velocity_random_amount` (`vel rand`) | Randomizes outgoing velocity (`0-127`). |
-| `velocity_seed` (`vel seed`) | Seed for velocity randomization. |
-| `gate_random_amount` (`gate rand`) | Randomizes gate length (`0-1600`). |
-| `gate_seed` | Seed for gate randomization. |
-| `random_octave_amount` (`oct rand`) | Amount of octave randomization (`0-100`). |
-| `random_octave_range` (`oct range`) | Octave randomization set: `+1`, `-1`, `+-1`, `+2`, `-2`, `+-2`. |
-| `random_octave_seed` (`oct seed`) | Seed for octave randomization. |
-| `random_note_amount` (`note rand`) | Replaces selected notes with other held notes (`0-100`). |
-| `random_note_seed` (`note seed`) | Seed for note replacement decisions. |
+- Internal clock or external MIDI clock sync
+- Rate, triplet, swing, gate, velocity override, and latch controls
+- Max voices with oldest-first voice stealing
+- Deterministic octave range modes (`0`, `+1`, `-1`, `+2`, `-2`)
+- Progression modes including pattern and random pattern
+- 40 progression presets with chord-step notation support
+- 40 rhythm presets with trigger/rest notation
+- Per-engine trigger behavior (`retrigger` / `continuous`)
+- Seeded modifier engine (drop, velocity, gate, octave, and note randomization)
+- Optional modifier loop length for repeating deterministic modulation
 
 ## Prerequisites
 
@@ -114,41 +55,73 @@ In Shadow UI, parameters are organized into categories.
 
 ### Global
 
-- `latch` (`off`/`on`) - Hold notes after release
-- `max_voices` (`1-64`) - Max simultaneous output voices
-- `rate` (`1/32`, `1/16`, `1/8`, `1/4`) - Step rate
-- `triplet` (`off`/`on`) - Triplet timing
-- `swing` (`0-100`) - Swing amount
-- `gate` (`0-1600`) - Gate length (100 = one step)
-- `velocity` (`0-127`) - Base velocity (`0` = as played)
-- `octave_range` (`0`, `+1`, `-1`, `+2`, `-2`) - Deterministic octave progression
-- `sync` (`internal`, `clock`) - Timing source
-- `bpm` (`40-240`) - Internal tempo
+Global controls define transport/timing behavior and base output characteristics for every generated note.
+
+| Parameter | What it does |
+|---------|--------|
+| `latch` | Holds notes after release when enabled. |
+| `max_voices` | Limits simultaneous output voices (`1-64`), stealing oldest first. |
+| `rate` | Sets arp step division (`1/32`, `1/16`, `1/8`, `1/4`). |
+| `triplet` | Enables triplet timing for step duration. |
+| `swing` | Applies swing amount (`0-100`) to internal timing. |
+| `gate` | Sets note length (`0-1600`), including overlaps beyond one step. |
+| `velocity` | Base velocity override (`0` = as played, `1-127` = fixed base). |
+| `octave_range` | Applies deterministic octave movement (`0`, `+1`, `-1`, `+2`, `-2`). |
+| `sync` | Chooses timing source (`internal` or incoming MIDI `clock`). |
+| `bpm` | Internal tempo (`40-240`) when `sync=internal`. |
 
 ### Progression
 
-- `mode` - Progression algorithm
-- `pattern` - Progression preset (used in `pattern` mode)
-- `trigger` (`retrigger`, `continuous`) - Progression reset behavior
-- `note policy` (`fold`, `wrap`, `clamp`, `skip`) - Out-of-range index handling
-- `rand seed` (`0-65535`) - Random progression seed
-- `rand length` (`1-32`) - Random pattern length
-- `rand chords` (`0-100`) - Chord density for random pattern
-- `rand ch seed` (`0-65535`) - Chord generation seed
+Progression controls decide which held notes are selected on each trigger step, including ordered, patterned, and seeded random behavior.
+
+Pattern notation for progression presets:
+- Numbers (`1`, `2`, `3`, ...) reference held notes sorted by pitch (lowest to highest).
+- `-` separates time steps.
+- Parentheses group simultaneous notes into a chord step, for example `(1-3)`.
+
+| Parameter | What it does |
+|---------|--------|
+| `progression_mode` (`mode`) | Selects note order engine: `up`, `down`, `as_played`, `leap_inward`, `leap_outward`, `chord`, `pattern`, `random_pattern`. |
+| `pattern_preset` (`pattern`) | Selects one of 40 progression presets for `pattern` mode. |
+| `progression_trigger` (`trigger`) | Sets reset policy: `retrigger` or `continuous`. |
+| `missing_note_policy` (`note policy`) | Handles out-of-range pattern indices: `fold`, `wrap`, `clamp`, `skip`. |
+| `progression_seed` (`rand seed`) | Main seed for random progression generation. |
+| `random_pattern_length` (`rand length`) | Sets random pattern length (`1-32`). For `random_pattern` mode only. |
+| `random_pattern_chords` (`rand chords`) | Increases chord density in random pattern (`0-100`). For `random_pattern` mode only. |
+| `random_pattern_chord_seed` (`rand ch seed`) | Additional seed used for random chord voicing choices. For `random_pattern` mode only. |
 
 ### Rhythm
 
-- `pattern` - Rhythm preset (`0` = trigger, `x` = rest)
-- `trigger` (`retrigger`, `continuous`) - Rhythm reset behavior
+Rhythm controls define trigger/rest pulses that gate progression advancement.
+
+Pattern notation for rhythm presets:
+- `0` means trigger/play a step.
+- `x` means rest/pause (no trigger on that step).
+- Each character is one step in sequence order from left to right.
+
+| Parameter | What it does |
+|---------|--------|
+| `rhythm_preset` (`pattern`) | Selects one of 40 rhythm strings (`0` = trigger, `x` = rest). |
+| `rhythm_trigger` (`trigger`) | Sets rhythm reset policy: `retrigger` or `continuous`. |
 
 ### Modifiers
 
-- `mod loop` (`0-128`) - Loop length for deterministic mod repetition (`0` = free-running)
-- `drop` (`0-100`) + `drop seed` - Probability of dropping a triggered step
-- `vel rand` (`0-127`) + `vel seed` - Velocity variation
-- `gate rand` (`0-1600`) + `gate seed` - Gate variation
-- `oct rand` (`0-100`) + `oct range` (`+1`, `-1`, `+-1`, `+2`, `-2`, `+-2`) + `oct seed`
-- `note rand` (`0-100`) + `note seed` - Replace selected notes with other held notes
+Modifiers add deterministic variation on top of selected notes. Each modifier has independent seeded behavior, and all can follow a shared loop length.
+
+| Parameter | What it does |
+|---------|--------|
+| `modifier_loop_length` (`mod loop`) | Loop length for modifier randomness (`0-128`, `0` = no loop). |
+| `drop_amount` (`drop`) | Probability-like amount to skip triggered steps (`0-100`). |
+| `drop_seed` | Seed for drop decisions. |
+| `velocity_random_amount` (`vel rand`) | Randomizes outgoing velocity (`0-127`). |
+| `velocity_seed` (`vel seed`) | Seed for velocity randomization. |
+| `gate_random_amount` (`gate rand`) | Randomizes gate length (`0-1600`). |
+| `gate_seed` | Seed for gate randomization. |
+| `random_octave_amount` (`oct rand`) | Amount of octave randomization (`0-100`). |
+| `random_octave_range` (`oct range`) | Octave randomization set: `+1`, `-1`, `+-1`, `+2`, `-2`, `+-2`. |
+| `random_octave_seed` (`oct seed`) | Seed for octave randomization. |
+| `random_note_amount` (`note rand`) | Replaces selected notes with other held notes (`0-100`). |
+| `random_note_seed` (`note seed`) | Seed for note replacement decisions. |
 
 ## Troubleshooting
 
