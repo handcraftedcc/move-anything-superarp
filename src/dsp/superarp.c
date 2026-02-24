@@ -14,7 +14,7 @@
 
 #define MAX_ARP_NOTES 16
 #define DEFAULT_BPM 120
-#define SUPERARP_DEBUG_LOG 1
+#define SUPERARP_DEBUG_LOG 0
 #define SUPERARP_LOG_PATH "/data/UserData/move-anything/superarp.log"
 #define CLOCK_START_GRACE_TICKS 1
 #define CLOCK_ARP_OUTPUT_DELAY_TICKS 1
