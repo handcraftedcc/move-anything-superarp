@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <math.h>
 #include "host/midi_fx_api_v1.h"
 #include "host/plugin_api_v1.h"
 
@@ -101,7 +102,10 @@ typedef struct {
     int phrase_running;
 
     int sample_rate, timing_dirty, step_interval_base, samples_until_step, swing_phase;
+    double step_interval_base_f, samples_until_step_f;
+    uint64_t internal_sample_total;
     int clock_counter, clocks_per_step, clock_running;
+    uint64_t clock_tick_total;
     int pending_step_triggers;
     int delayed_step_triggers;
     uint8_t voice_notes[MAX_VOICES];
@@ -615,37 +619,67 @@ static void recalc_clock_timing(superarp_instance_t *inst) {
     inst->clocks_per_step = clocks;
 }
 
+static void realign_clock_phase(superarp_instance_t *inst) {
+    if (!inst) return;
+    if (inst->clocks_per_step < 1) inst->clocks_per_step = 1;
+    inst->clock_counter = (int)(inst->clock_tick_total % (uint64_t)inst->clocks_per_step);
+    /*
+     * Drop queued triggers from the previous division grid so the new rate
+     * resumes on the host-anchored clock phase immediately.
+     */
+    inst->pending_step_triggers = 0;
+    inst->delayed_step_triggers = 0;
+}
+
 static void recalc_timing(superarp_instance_t *inst, int sample_rate) {
-    float step_samples;
+    double step_samples;
     int spb;
     if (!inst || sample_rate <= 0) return;
     if (inst->bpm < 40) inst->bpm = 40;
     if (inst->bpm > 240) inst->bpm = 240;
     spb = steps_per_beat(inst->rate);
-    step_samples = ((float)sample_rate * 60.0f) / ((float)inst->bpm * (float)spb);
-    if (inst->triplet) step_samples *= (2.0f / 3.0f);
-    if (step_samples < 1.0f) step_samples = 1.0f;
+    step_samples = ((double)sample_rate * 60.0) / ((double)inst->bpm * (double)spb);
+    if (inst->triplet) step_samples *= (2.0 / 3.0);
+    if (step_samples < 1.0) step_samples = 1.0;
     inst->sample_rate = sample_rate;
-    inst->step_interval_base = (int)(step_samples + 0.5f);
+    inst->step_interval_base_f = step_samples;
+    inst->step_interval_base = (int)(step_samples + 0.5);
     if (inst->step_interval_base < 1) inst->step_interval_base = 1;
-    if (inst->samples_until_step > inst->step_interval_base || inst->samples_until_step <= 0) {
-        inst->samples_until_step = inst->step_interval_base;
+    if (inst->samples_until_step_f > inst->step_interval_base_f || inst->samples_until_step_f <= 0.0) {
+        inst->samples_until_step_f = inst->step_interval_base_f;
     }
+    inst->samples_until_step = (int)(inst->samples_until_step_f + 0.5);
+    if (inst->samples_until_step < 1) inst->samples_until_step = 1;
     inst->timing_dirty = 0;
 }
 
-static int next_step_interval(superarp_instance_t *inst) {
-    int base, sw, d, out;
-    if (!inst) return 1;
-    base = inst->step_interval_base > 0 ? inst->step_interval_base : 1;
+static double next_step_interval(superarp_instance_t *inst) {
+    double base, sw, d, out;
+    if (!inst) return 1.0;
+    base = inst->step_interval_base_f > 0.0 ? inst->step_interval_base_f : 1.0;
     if (inst->triplet) return base;
     sw = clamp_int(inst->swing, 0, 100);
     if (sw == 0) return base;
-    d = (base * sw) / 200;
+    d = (base * (double)sw) / 200.0;
     if (inst->swing_phase == 0) { out = base + d; inst->swing_phase = 1; }
     else { out = base - d; inst->swing_phase = 0; }
-    if (out < 1) out = 1;
+    if (out < 1.0) out = 1.0;
     return out;
+}
+
+static void realign_internal_phase(superarp_instance_t *inst) {
+    double interval, rem, until_next;
+    if (!inst) return;
+    interval = inst->step_interval_base_f > 0.0 ? inst->step_interval_base_f : 1.0;
+    rem = fmod((double)inst->internal_sample_total, interval);
+    if (rem < 0.0) rem += interval;
+    if (rem < 1e-9) until_next = interval;
+    else until_next = interval - rem;
+    if (until_next < 1.0) until_next = 1.0;
+    inst->samples_until_step_f = until_next;
+    inst->samples_until_step = (int)(until_next + 0.5);
+    if (inst->samples_until_step < 1) inst->samples_until_step = 1;
+    inst->swing_phase = 0;
 }
 
 static void update_phrase_running(superarp_instance_t *inst) {
@@ -1311,9 +1345,9 @@ static int process_clock_tick(superarp_instance_t *inst, uint8_t out_msgs[][3], 
     }
     (void)advance_voice_timers_clock(inst, out_msgs, out_lens, max_out, &count);
 
-    inst->clock_counter++;
-    if (inst->clock_counter >= inst->clocks_per_step) {
-        inst->clock_counter = 0;
+    inst->clock_tick_total++;
+    inst->clock_counter = (int)(inst->clock_tick_total % (uint64_t)inst->clocks_per_step);
+    if (inst->clock_counter == 0) {
         if (CLOCK_ARP_OUTPUT_DELAY_TICKS > 0) {
             inst->delayed_step_triggers++;
             dlog(inst, "clock boundary delayed_step++ -> %d", inst->delayed_step_triggers);
@@ -1379,10 +1413,14 @@ static void* superarp_create_instance(const char *module_dir, const char *config
     inst->timing_dirty = 1;
     inst->step_interval_base = 1;
     inst->samples_until_step = 0;
+    inst->step_interval_base_f = 1.0;
+    inst->samples_until_step_f = 0.0;
+    inst->internal_sample_total = 0;
     inst->swing_phase = 0;
     inst->clock_counter = 0;
     inst->clocks_per_step = 6;
     inst->clock_running = 1;
+    inst->clock_tick_total = 0;
     inst->pending_step_triggers = 0;
     inst->delayed_step_triggers = 0;
     inst->voice_count = 0;
@@ -1424,6 +1462,7 @@ static int superarp_process_midi(void *instance, const uint8_t *in_msg, int in_l
         if (status == 0xFA) { /* Start */
             inst->clock_running = 1;
             inst->clock_counter = 0;
+            inst->clock_tick_total = 0;
             inst->pending_step_triggers = 0;
             inst->delayed_step_triggers = 0;
             reset_phrase(inst);
@@ -1455,7 +1494,10 @@ static int superarp_process_midi(void *instance, const uint8_t *in_msg, int in_l
         if (status == 0xFA || status == 0xFB) { /* Start / Continue */
             if (inst->timing_dirty && inst->sample_rate > 0) recalc_timing(inst, inst->sample_rate);
             inst->swing_phase = 0;
-            inst->samples_until_step = inst->step_interval_base > 0 ? inst->step_interval_base : 1;
+            inst->internal_sample_total = 0;
+            inst->samples_until_step_f = inst->step_interval_base_f > 0.0 ? inst->step_interval_base_f : 1.0;
+            inst->samples_until_step = (int)(inst->samples_until_step_f + 0.5);
+            if (inst->samples_until_step < 1) inst->samples_until_step = 1;
             inst->internal_start_grace_armed = 1;
             reset_phrase(inst);
             dlog(inst, status == 0xFA ? "MIDI Start (internal reset)" : "MIDI Continue (internal reset)");
@@ -1494,7 +1536,9 @@ static int superarp_process_midi(void *instance, const uint8_t *in_msg, int in_l
                 inst->internal_start_grace_armed = 0;
                 dlog(inst, "NOTE_ON internal-start grace-hit -> immediate run_step");
                 count = run_step(inst, out_msgs, out_lens, max_out);
-                inst->samples_until_step = next_step_interval(inst);
+                inst->samples_until_step_f = next_step_interval(inst);
+                if (inst->samples_until_step_f < 1.0) inst->samples_until_step_f = 1.0;
+                inst->samples_until_step = (int)(inst->samples_until_step_f + 0.5);
                 if (inst->samples_until_step < 1) inst->samples_until_step = 1;
                 return count;
             }
@@ -1557,12 +1601,15 @@ static int superarp_tick(void *instance, int frames, int sample_rate,
         return count;
     }
 
-    inst->samples_until_step -= frames;
-    if (inst->samples_until_step <= 0) {
+    inst->internal_sample_total += (uint64_t)frames;
+    inst->samples_until_step_f -= (double)frames;
+    while (inst->samples_until_step_f <= 0.0 && count < max_out) {
         count += run_step(inst, out_msgs + count, out_lens + count, max_out - count);
-        inst->samples_until_step += next_step_interval(inst);
-        if (inst->samples_until_step < 1) inst->samples_until_step = 1;
+        inst->samples_until_step_f += next_step_interval(inst);
+        if (inst->samples_until_step_f < 1.0) inst->samples_until_step_f = 1.0;
     }
+    inst->samples_until_step = (int)(inst->samples_until_step_f + 0.5);
+    if (inst->samples_until_step < 1) inst->samples_until_step = 1;
     return count;
 }
 
@@ -1651,17 +1698,29 @@ static void superarp_set_param(void *instance, const char *key, const char *val)
     else if (strcmp(key, "velocity") == 0) inst->velocity_override = clamp_int(atoi(val), 0, 127);
     else if (strcmp(key, "sync") == 0) {
         if (strcmp(val, "clock") == 0) {
-            inst->sync_mode = SYNC_CLOCK;
-            inst->clock_running = 1;
-            inst->clock_counter = 0;
-            inst->pending_step_triggers = 0;
-            inst->delayed_step_triggers = 0;
+            if (inst->sync_mode != SYNC_CLOCK) {
+                inst->sync_mode = SYNC_CLOCK;
+                inst->clock_running = 1;
+                inst->clock_counter = 0;
+                inst->clock_tick_total = 0;
+                inst->pending_step_triggers = 0;
+                inst->delayed_step_triggers = 0;
+            }
             recalc_clock_timing(inst);
         } else {
-            inst->sync_mode = SYNC_INTERNAL;
-            inst->clock_counter = 0;
-            inst->pending_step_triggers = 0;
-            inst->delayed_step_triggers = 0;
+            if (inst->sync_mode != SYNC_INTERNAL) {
+                inst->sync_mode = SYNC_INTERNAL;
+                inst->clock_counter = 0;
+                inst->clock_tick_total = 0;
+                inst->pending_step_triggers = 0;
+                inst->delayed_step_triggers = 0;
+                inst->internal_sample_total = 0;
+                if (inst->sample_rate > 0) recalc_timing(inst, inst->sample_rate);
+                inst->samples_until_step_f = inst->step_interval_base_f > 0.0 ? inst->step_interval_base_f : 1.0;
+                inst->samples_until_step = (int)(inst->samples_until_step_f + 0.5);
+                if (inst->samples_until_step < 1) inst->samples_until_step = 1;
+                inst->swing_phase = 0;
+            }
         }
     }
     else if (strcmp(key, "swing") == 0) inst->swing = clamp_int(atoi(val), 0, 100);
@@ -1729,6 +1788,23 @@ static void superarp_set_param(void *instance, const char *key, const char *val)
         if (json_get_int(val, "random_octave_seed", &i)) { snprintf(b, sizeof(b), "%d", i); superarp_set_param(inst, "random_octave_seed", b); }
         if (json_get_int(val, "random_note_amount", &i)) { snprintf(b, sizeof(b), "%d", i); superarp_set_param(inst, "random_note_amount", b); }
         if (json_get_int(val, "random_note_seed", &i)) { snprintf(b, sizeof(b), "%d", i); superarp_set_param(inst, "random_note_seed", b); }
+    }
+
+    if ((strcmp(key, "rate") == 0 || strcmp(key, "triplet") == 0) &&
+        inst->sync_mode == SYNC_CLOCK && inst->clock_running) {
+        realign_clock_phase(inst);
+        dlog(inst, "clock realign rate/triplet cps=%d cc=%d total=%llu",
+             inst->clocks_per_step, inst->clock_counter,
+             (unsigned long long)inst->clock_tick_total);
+    }
+
+    if ((strcmp(key, "rate") == 0 || strcmp(key, "triplet") == 0 || strcmp(key, "bpm") == 0) &&
+        inst->sync_mode == SYNC_INTERNAL && inst->sample_rate > 0) {
+        recalc_timing(inst, inst->sample_rate);
+        realign_internal_phase(inst);
+        dlog(inst, "internal realign key=%s base=%.4f until=%.4f total=%llu",
+             key, inst->step_interval_base_f, inst->samples_until_step_f,
+             (unsigned long long)inst->internal_sample_total);
     }
 }
 
