@@ -9,7 +9,6 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
-#include <math.h>
 #include "host/midi_fx_api_v1.h"
 #include "host/plugin_api_v1.h"
 
@@ -669,10 +668,14 @@ static double next_step_interval(superarp_instance_t *inst) {
 
 static void realign_internal_phase(superarp_instance_t *inst) {
     double interval, rem, until_next;
+    double total_f, q;
     if (!inst) return;
     interval = inst->step_interval_base_f > 0.0 ? inst->step_interval_base_f : 1.0;
-    rem = fmod((double)inst->internal_sample_total, interval);
-    if (rem < 0.0) rem += interval;
+    total_f = (double)inst->internal_sample_total;
+    q = (double)((uint64_t)(total_f / interval));
+    rem = total_f - (q * interval);
+    while (rem >= interval) rem -= interval;
+    while (rem < 0.0) rem += interval;
     if (rem < 1e-9) until_next = interval;
     else until_next = interval - rem;
     if (until_next < 1.0) until_next = 1.0;
