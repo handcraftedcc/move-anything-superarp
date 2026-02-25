@@ -1107,6 +1107,36 @@ static int flush_all_voices(superarp_instance_t *inst,
     return emitted;
 }
 
+static int handle_transport_stop(superarp_instance_t *inst,
+                                 uint8_t out_msgs[][3], int out_lens[], int max_out) {
+    int count = 0;
+    if (!inst) return 0;
+
+    /*
+     * Panic first: ask downstream synths to stop all sounding notes.
+     * Super Arp emits notes on channel 1 (0x90/0x80 base status), so use 0xB0.
+     */
+    if (max_out > 0) {
+        (void)emit3(out_msgs, out_lens, max_out, &count, 0xB0, 123, 0); /* CC123: All Notes Off */
+    }
+
+    /* Explicitly flush tracked voices too (for recipients that ignore CC123). */
+    if (inst->voice_count > 0 && count < max_out) {
+        (void)flush_all_voices(inst, out_msgs + count, out_lens + count, max_out - count, &count);
+    }
+
+    /* Clear held/latch state so phrase does not keep running after transport stop. */
+    inst->physical_count = 0;
+    inst->physical_as_played_count = 0;
+    clear_active(inst);
+    inst->note_set_dirty = 0;
+    inst->latch_ready_replace = inst->latch ? 1 : 0;
+    inst->phrase_running = 0;
+    reset_phrase(inst);
+
+    return count;
+}
+
 static int kill_voice_notes(superarp_instance_t *inst, uint8_t note,
                             uint8_t out_msgs[][3], int out_lens[], int max_out, int *count) {
     int i = 0, killed = 0;
@@ -1413,11 +1443,7 @@ static int superarp_process_midi(void *instance, const uint8_t *in_msg, int in_l
             inst->pending_step_triggers = 0;
             inst->delayed_step_triggers = 0;
             dlog(inst, "MIDI Stop");
-            if (inst->voice_count > 0 && max_out > 0) {
-                (void)flush_all_voices(inst, out_msgs, out_lens, max_out, &count);
-                return count;
-            }
-            return 0;
+            return handle_transport_stop(inst, out_msgs, out_lens, max_out);
         }
         if (status == 0xF8) { /* Clock tick */
             if (!inst->clock_running) return 0;
@@ -1438,11 +1464,7 @@ static int superarp_process_midi(void *instance, const uint8_t *in_msg, int in_l
         if (status == 0xFC) { /* Stop */
             inst->internal_start_grace_armed = 0;
             dlog(inst, "MIDI Stop (internal)");
-            if (inst->voice_count > 0 && max_out > 0) {
-                (void)flush_all_voices(inst, out_msgs, out_lens, max_out, &count);
-                return count;
-            }
-            return 0;
+            return handle_transport_stop(inst, out_msgs, out_lens, max_out);
         }
     }
 
