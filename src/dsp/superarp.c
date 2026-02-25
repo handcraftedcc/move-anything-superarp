@@ -777,19 +777,23 @@ static void restore_progression_cursor(superarp_instance_t *inst, int keep_note)
 static void apply_pending_note_set(superarp_instance_t *inst) {
     int keep_next = -1;
     int preserve_cursor;
+    int note_based_mode;
     int old_cycle_count = 0;
     int new_cycle_count = 0;
+    int cycle_count = 1;
     if (!inst || inst->latch || !inst->note_set_dirty) return;
+
+    note_based_mode = (inst->progression_mode == PROG_UP ||
+                       inst->progression_mode == PROG_DOWN ||
+                       inst->progression_mode == PROG_AS_PLAYED);
 
     if (inst->progression_mode == PROG_AS_PLAYED && inst->as_played_count > 0) old_cycle_count = inst->as_played_count;
     else old_cycle_count = inst->active_count;
 
     preserve_cursor = (inst->active_count > 0 &&
                        inst->physical_count > 0 &&
-                       inst->progression_emit_index > 0 &&
-                       (inst->progression_mode == PROG_UP ||
-                        inst->progression_mode == PROG_DOWN ||
-                        inst->progression_mode == PROG_AS_PLAYED));
+                       inst->global_step_index > 0 &&
+                       inst->progression_mode != PROG_CHORD);
     if (preserve_cursor) keep_next = peek_next_note(inst);
     dlog(inst, "apply_pending start preserve=%d keep_next=%d old_cycle=%d pc=%d ac=%d asc=%d cursor=%d emit_idx=%llu",
          preserve_cursor, keep_next, old_cycle_count, inst->physical_count, inst->active_count, inst->as_played_count,
@@ -803,22 +807,38 @@ static void apply_pending_note_set(superarp_instance_t *inst) {
     }
 
     if (preserve_cursor) {
-        restore_progression_cursor(inst, keep_next);
-        if (inst->progression_mode == PROG_AS_PLAYED && inst->as_played_count > 0) new_cycle_count = inst->as_played_count;
-        else new_cycle_count = inst->active_count;
+        if (note_based_mode) {
+            restore_progression_cursor(inst, keep_next);
+            if (inst->progression_mode == PROG_AS_PLAYED && inst->as_played_count > 0) new_cycle_count = inst->as_played_count;
+            else new_cycle_count = inst->active_count;
 
-        /*
-         * If we were cycling a single-note set and the player adds notes after
-         * the first emit, move to the next slot so step 2 does not replay step 1.
-         */
-        if (old_cycle_count == 1 && new_cycle_count > 1) {
-            if (inst->progression_mode == PROG_DOWN) {
-                inst->progression_cursor = (inst->progression_cursor - 1 + new_cycle_count) % new_cycle_count;
-            } else {
-                inst->progression_cursor = (inst->progression_cursor + 1) % new_cycle_count;
+            /*
+             * If we were cycling a single-note set and the player adds notes after
+             * the first emit, move to the next slot so step 2 does not replay step 1.
+             */
+            if (old_cycle_count == 1 && new_cycle_count > 1) {
+                if (inst->progression_mode == PROG_DOWN) {
+                    inst->progression_cursor = (inst->progression_cursor - 1 + new_cycle_count) % new_cycle_count;
+                } else {
+                    inst->progression_cursor = (inst->progression_cursor + 1) % new_cycle_count;
+                }
             }
+            dlog(inst, "apply_pending preserve-done new_cycle=%d cursor=%d", new_cycle_count, inst->progression_cursor);
+        } else {
+            if (inst->progression_mode == PROG_PATTERN) {
+                cycle_count = inst->progression_pattern.step_count > 0 ? inst->progression_pattern.step_count : 1;
+            } else if (inst->progression_mode == PROG_RANDOM_PATTERN) {
+                cycle_count = inst->random_pattern_length > 0 ? inst->random_pattern_length : 1;
+            } else if (inst->progression_mode == PROG_LEAP_INWARD || inst->progression_mode == PROG_LEAP_OUTWARD) {
+                cycle_count = inst->active_count > 0 ? inst->active_count : 1;
+            } else {
+                cycle_count = inst->active_count > 0 ? inst->active_count : 1;
+            }
+            if (cycle_count < 1) cycle_count = 1;
+            if (inst->progression_cursor < 0) inst->progression_cursor = 0;
+            else inst->progression_cursor %= cycle_count;
+            dlog(inst, "apply_pending preserve-step cycle=%d cursor=%d", cycle_count, inst->progression_cursor);
         }
-        dlog(inst, "apply_pending preserve-done new_cycle=%d cursor=%d", new_cycle_count, inst->progression_cursor);
     } else {
         inst->progression_cursor = (inst->progression_mode == PROG_DOWN) ? -1 : 0;
         dlog(inst, "apply_pending reset cursor=%d", inst->progression_cursor);
@@ -829,7 +849,17 @@ static void apply_pending_note_set(superarp_instance_t *inst) {
 
 static void note_on(superarp_instance_t *inst, uint8_t note, uint8_t vel) {
     int keep_next;
+    int note_based_mode;
+    int old_cycle_count = 0;
+    int new_cycle_count = 0;
     if (!inst) return;
+    note_based_mode = (inst->progression_mode == PROG_UP ||
+                       inst->progression_mode == PROG_DOWN ||
+                       inst->progression_mode == PROG_AS_PLAYED);
+    if (note_based_mode) {
+        if (inst->progression_mode == PROG_AS_PLAYED && inst->as_played_count > 0) old_cycle_count = inst->as_played_count;
+        else old_cycle_count = inst->active_count;
+    }
     keep_next = peek_next_note(inst);
     dlog(inst, "note_on state-before note=%u vel=%u pc=%d ac=%d asc=%d keep_next=%d cursor=%d emit_idx=%llu",
          note, vel, inst->physical_count, inst->active_count, inst->as_played_count, keep_next, inst->progression_cursor,
@@ -841,7 +871,20 @@ static void note_on(superarp_instance_t *inst, uint8_t note, uint8_t vel) {
         if (inst->latch_ready_replace) { clear_active(inst); inst->latch_ready_replace = 0; reset_phrase(inst); }
         arr_add_sorted(inst->active_notes, &inst->active_count, note);
         as_played_add(inst, note);
-        restore_progression_cursor(inst, keep_next);
+        if (note_based_mode) {
+            restore_progression_cursor(inst, keep_next);
+            if (inst->progression_mode == PROG_AS_PLAYED && inst->as_played_count > 0) new_cycle_count = inst->as_played_count;
+            else new_cycle_count = inst->active_count;
+            if (inst->global_step_index > 0 && old_cycle_count == 1 && new_cycle_count > 1) {
+                if (inst->progression_mode == PROG_DOWN) {
+                    inst->progression_cursor = (inst->progression_cursor - 1 + new_cycle_count) % new_cycle_count;
+                } else {
+                    inst->progression_cursor = (inst->progression_cursor + 1) % new_cycle_count;
+                }
+                dlog(inst, "note_on latch single->multi advance new_cycle=%d cursor=%d",
+                     new_cycle_count, inst->progression_cursor);
+            }
+        }
     } else {
         inst->note_set_dirty = 1;
     }
@@ -852,13 +895,17 @@ static void note_on(superarp_instance_t *inst, uint8_t note, uint8_t vel) {
 
 static void note_off(superarp_instance_t *inst, uint8_t note) {
     int keep_next;
+    int note_based_mode;
     if (!inst) return;
+    note_based_mode = (inst->progression_mode == PROG_UP ||
+                       inst->progression_mode == PROG_DOWN ||
+                       inst->progression_mode == PROG_AS_PLAYED);
     keep_next = peek_next_note(inst);
     arr_remove(inst->physical_notes, &inst->physical_count, note);
     arr_remove(inst->physical_as_played, &inst->physical_as_played_count, note);
     if (inst->latch) {
         if (inst->physical_count == 0) inst->latch_ready_replace = 1;
-        restore_progression_cursor(inst, keep_next);
+        if (note_based_mode) restore_progression_cursor(inst, keep_next);
     } else {
         if (inst->physical_count == 0) {
             clear_active(inst);
