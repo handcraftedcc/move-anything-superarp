@@ -119,6 +119,38 @@ typedef struct {
 
 static const host_api_v1_t *g_host = NULL;
 
+static int superarp_query_clock_status(const superarp_instance_t *inst) {
+    if (g_host && g_host->get_clock_status) {
+        return g_host->get_clock_status();
+    }
+
+    if (inst && inst->clock_running) {
+        return MOVE_CLOCK_STATUS_RUNNING;
+    }
+    return MOVE_CLOCK_STATUS_STOPPED;
+}
+
+static int superarp_get_sync_warning(superarp_instance_t *inst, char *buf, int buf_len) {
+    int status;
+
+    if (!inst || !buf || buf_len < 1) return -1;
+    if (inst->sync_mode != SYNC_CLOCK) {
+        buf[0] = '\0';
+        return 0;
+    }
+
+    status = superarp_query_clock_status(inst);
+    if (status == MOVE_CLOCK_STATUS_UNAVAILABLE) {
+        return snprintf(buf, buf_len, "Enable MIDI Clock Out in Move settings");
+    }
+    if (status == MOVE_CLOCK_STATUS_STOPPED) {
+        return snprintf(buf, buf_len, "Clock out enabled, transport stopped");
+    }
+
+    buf[0] = '\0';
+    return 0;
+}
+
 static const char *k_default_rhythm_pattern = "00";
 static const char *k_default_progression_pattern = "1-2-3";
 
@@ -1900,6 +1932,7 @@ static int superarp_get_param(void *instance, const char *key, char *buf, int bu
     if (strcmp(key, "gate") == 0) return snprintf(buf, buf_len, "%d", inst->gate);
     if (strcmp(key, "velocity") == 0) return snprintf(buf, buf_len, "%d", inst->velocity_override);
     if (strcmp(key, "sync") == 0) return snprintf(buf, buf_len, "%s", sync);
+    if (strcmp(key, "error") == 0) return superarp_get_sync_warning(inst, buf, buf_len);
     if (strcmp(key, "swing") == 0) return snprintf(buf, buf_len, "%d", inst->swing);
     if (strcmp(key, "phase_offset") == 0) return snprintf(buf, buf_len, "%d", inst->phase_offset);
     if (strcmp(key, "latch") == 0) return snprintf(buf, buf_len, "%s", latch);
