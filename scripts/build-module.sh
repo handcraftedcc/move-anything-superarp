@@ -78,6 +78,7 @@ ${CROSS_PREFIX}gcc -g -O3 -fPIC -shared \
 # Copy files to dist (use cat to avoid ExtFS deallocation issues with Docker)
 echo "Packaging..."
 cat src/module.json > dist/superarp/module.json
+[ -f src/help.json ] && cat src/help.json > dist/superarp/help.json
 cat build/dsp.so > dist/superarp/dsp.so
 chmod +x dist/superarp/dsp.so
 
