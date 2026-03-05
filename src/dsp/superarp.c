@@ -69,6 +69,7 @@ typedef struct {
     int rhythm_seed;
     trigger_mode_t progression_trigger_mode;
     trigger_mode_t rhythm_trigger_mode;
+    trigger_mode_t modifier_trigger_mode;
     int modifier_loop_length;
     int drop_amount, drop_seed;
     int velocity_random_amount, velocity_seed;
@@ -97,6 +98,7 @@ typedef struct {
 
     int progression_cursor, rhythm_cursor;
     uint64_t global_step_index;
+    uint64_t modifier_step_counter;
     uint64_t progression_emit_index;
     int phrase_running;
 
@@ -256,8 +258,8 @@ static uint64_t modifier_step_index(const superarp_instance_t *inst) {
     int loop_len;
     if (!inst) return 0;
     loop_len = clamp_int(inst->modifier_loop_length, 0, 128);
-    if (loop_len <= 0) return inst->global_step_index;
-    return inst->global_step_index % (uint64_t)loop_len;
+    if (loop_len <= 0) return inst->modifier_step_counter;
+    return inst->modifier_step_counter % (uint64_t)loop_len;
 }
 
 static uint32_t modifier_rng_hash(superarp_instance_t *inst, uint32_t held_hash) {
@@ -596,10 +598,18 @@ static void reset_rhythm_state(superarp_instance_t *inst) {
     inst->rhythm_cursor = 0;
 }
 
-static void reset_phrase(superarp_instance_t *inst) {
+static void reset_modifier_state(superarp_instance_t *inst) {
+    if (!inst) return;
+    inst->modifier_step_counter = 0;
+}
+
+static void reset_phrase(superarp_instance_t *inst, int force_modifier_reset) {
     if (!inst) return;
     reset_rhythm_state(inst);
     reset_progression_state(inst);
+    if (force_modifier_reset || inst->modifier_trigger_mode == TRIG_RETRIGGER) {
+        reset_modifier_state(inst);
+    }
     /* Keep transport phase continuous across phrase resets. */
     inst->swing_phase = 0;
 }
@@ -724,12 +734,14 @@ static void update_phrase_running(superarp_instance_t *inst) {
             inst->phrase_running = 1;
             if (inst->rhythm_trigger_mode == TRIG_RETRIGGER) reset_rhythm_state(inst);
             if (inst->progression_trigger_mode == TRIG_RETRIGGER) reset_progression_state(inst);
+            if (inst->modifier_trigger_mode == TRIG_RETRIGGER) reset_modifier_state(inst);
         }
     } else {
         if (inst->phrase_running) {
             inst->phrase_running = 0;
             if (inst->rhythm_trigger_mode == TRIG_RETRIGGER) reset_rhythm_state(inst);
             if (inst->progression_trigger_mode == TRIG_RETRIGGER) reset_progression_state(inst);
+            if (inst->modifier_trigger_mode == TRIG_RETRIGGER) reset_modifier_state(inst);
         }
     }
 }
@@ -903,7 +915,7 @@ static void note_on(superarp_instance_t *inst, uint8_t note, uint8_t vel) {
     arr_add_sorted(inst->physical_notes, &inst->physical_count, note);
     arr_add_tail_unique(inst->physical_as_played, &inst->physical_as_played_count, note);
     if (inst->latch) {
-        if (inst->latch_ready_replace) { clear_active(inst); inst->latch_ready_replace = 0; reset_phrase(inst); }
+        if (inst->latch_ready_replace) { clear_active(inst); inst->latch_ready_replace = 0; reset_phrase(inst, 0); }
         arr_add_sorted(inst->active_notes, &inst->active_count, note);
         as_played_add(inst, note);
         if (note_based_mode) {
@@ -1248,7 +1260,7 @@ static int handle_transport_stop(superarp_instance_t *inst,
     inst->note_set_dirty = 0;
     inst->latch_ready_replace = inst->latch ? 1 : 0;
     inst->phrase_running = 0;
-    reset_phrase(inst);
+    reset_phrase(inst, 1);
 
     return count;
 }
@@ -1360,6 +1372,12 @@ static int schedule_notes(superarp_instance_t *inst, const int *notes, int note_
     return 1;
 }
 
+static void advance_step_counters(superarp_instance_t *inst) {
+    if (!inst) return;
+    inst->global_step_index++;
+    inst->modifier_step_counter++;
+}
+
 static int run_step(superarp_instance_t *inst, uint8_t out_msgs[][3], int out_lens[], int max_out) {
     int count = 0, notes[MAX_ARP_NOTES], final_notes[MAX_ARP_NOTES], note_count, final_count, i, ok;
     int vel, gate_pct, oct_rand;
@@ -1371,7 +1389,7 @@ static int run_step(superarp_instance_t *inst, uint8_t out_msgs[][3], int out_le
          inst->physical_count, inst->active_count, inst->as_played_count, (unsigned long long)inst->progression_emit_index);
     if (!step_is_trigger(inst)) {
         dlog(inst, "run_step rest gs=%llu", (unsigned long long)inst->global_step_index);
-        inst->global_step_index++;
+        advance_step_counters(inst);
         return 0;
     }
     apply_pending_note_set(inst);
@@ -1380,7 +1398,7 @@ static int run_step(superarp_instance_t *inst, uint8_t out_msgs[][3], int out_le
     mod_hash = modifier_rng_hash(inst, hhash);
     if (should_drop_step(inst, mod_hash, mod_step)) {
         dlog(inst, "run_step drop gs=%llu", (unsigned long long)inst->global_step_index);
-        inst->global_step_index++;
+        advance_step_counters(inst);
         return 0;
     }
     vel = step_velocity(inst, mod_step);
@@ -1394,7 +1412,7 @@ static int run_step(superarp_instance_t *inst, uint8_t out_msgs[][3], int out_le
             inst->progression_emit_index++;
         }
         dlog(inst, "run_step no-note gs=%llu", (unsigned long long)inst->global_step_index);
-        inst->global_step_index++;
+        advance_step_counters(inst);
         return 0;
     }
     final_count = 0;
@@ -1404,7 +1422,7 @@ static int run_step(superarp_instance_t *inst, uint8_t out_msgs[][3], int out_le
         final_count = add_unique_note(final_notes, final_count, out_note);
     }
     if (final_count <= 0) {
-        inst->global_step_index++;
+        advance_step_counters(inst);
         return 0;
     }
     ok = schedule_notes(inst, final_notes, final_count, vel, gate_pct, out_msgs, out_lens, max_out, &count);
@@ -1412,7 +1430,7 @@ static int run_step(superarp_instance_t *inst, uint8_t out_msgs[][3], int out_le
     dlog(inst, "run_step emit=%d note0=%d count=%d vel=%d gate=%d gs=%llu pending=%d",
          ok ? 1 : 0, final_notes[0], final_count, vel, gate_pct,
          (unsigned long long)inst->global_step_index, inst->pending_step_triggers);
-    inst->global_step_index++;
+    advance_step_counters(inst);
     return count;
 }
 
@@ -1478,6 +1496,7 @@ static void* superarp_create_instance(const char *module_dir, const char *config
     inst->rhythm_seed = 1;
     inst->progression_trigger_mode = TRIG_RETRIGGER;
     inst->rhythm_trigger_mode = TRIG_RETRIGGER;
+    inst->modifier_trigger_mode = TRIG_RETRIGGER;
     inst->modifier_loop_length = 16;
     inst->drop_amount = 0;
     inst->drop_seed = 1;
@@ -1547,7 +1566,7 @@ static int superarp_process_midi(void *instance, const uint8_t *in_msg, int in_l
             inst->clock_tick_total = 0;
             inst->pending_step_triggers = 0;
             inst->delayed_step_triggers = 0;
-            reset_phrase(inst);
+            reset_phrase(inst, 1);
             dlog(inst, "MIDI Start");
             return 0;
         }
@@ -1581,7 +1600,7 @@ static int superarp_process_midi(void *instance, const uint8_t *in_msg, int in_l
             inst->samples_until_step = (int)(inst->samples_until_step_f + 0.5);
             if (inst->samples_until_step < 1) inst->samples_until_step = 1;
             inst->internal_start_grace_armed = 1;
-            reset_phrase(inst);
+            reset_phrase(inst, 1);
             dlog(inst, status == 0xFA ? "MIDI Start (internal reset)" : "MIDI Continue (internal reset)");
             return 0;
         }
@@ -1827,6 +1846,7 @@ static void superarp_set_param(void *instance, const char *key, const char *val)
     else if (strcmp(key, "velocity_seed") == 0) inst->velocity_seed = clamp_int(atoi(val), 0, 65535);
     else if (strcmp(key, "gate_random_amount") == 0) inst->gate_random_amount = clamp_int(atoi(val), 0, 1600);
     else if (strcmp(key, "gate_seed") == 0) inst->gate_seed = clamp_int(atoi(val), 0, 65535);
+    else if (strcmp(key, "modifier_trigger") == 0) set_enum_trigger_mode(&inst->modifier_trigger_mode, val);
     else if (strcmp(key, "modifier_loop_length") == 0) inst->modifier_loop_length = clamp_int(atoi(val), 0, 128);
     else if (strcmp(key, "random_octave_amount") == 0) inst->random_octave_amount = clamp_int(atoi(val), 0, 100);
     else if (strcmp(key, "random_octave_range") == 0) set_enum_random_octave_range(inst, val);
@@ -1864,6 +1884,7 @@ static void superarp_set_param(void *instance, const char *key, const char *val)
         if (json_get_int(val, "velocity_seed", &i)) { snprintf(b, sizeof(b), "%d", i); superarp_set_param(inst, "velocity_seed", b); }
         if (json_get_int(val, "gate_random_amount", &i)) { snprintf(b, sizeof(b), "%d", i); superarp_set_param(inst, "gate_random_amount", b); }
         if (json_get_int(val, "gate_seed", &i)) { snprintf(b, sizeof(b), "%d", i); superarp_set_param(inst, "gate_seed", b); }
+        if (json_get_string(val, "modifier_trigger", s, sizeof(s))) superarp_set_param(inst, "modifier_trigger", s);
         if (json_get_int(val, "modifier_loop_length", &i)) { snprintf(b, sizeof(b), "%d", i); superarp_set_param(inst, "modifier_loop_length", b); }
         if (json_get_int(val, "random_octave_amount", &i)) { snprintf(b, sizeof(b), "%d", i); superarp_set_param(inst, "random_octave_amount", b); }
         if (json_get_string(val, "random_octave_range", s, sizeof(s))) superarp_set_param(inst, "random_octave_range", s);
@@ -1896,7 +1917,7 @@ static int superarp_get_param(void *instance, const char *key, char *buf, int bu
     const char *sync = inst && inst->sync_mode == SYNC_CLOCK ? "clock" : "internal";
     const char *pm = "up", *miss = "fold";
     const char *pat, *rhy;
-    const char *prog_trigger, *rhy_trigger;
+    const char *prog_trigger, *rhy_trigger, *mod_trigger;
     const char *oct_range = "+1";
     const char *glob_oct = "0";
     if (!inst || !key || !buf || buf_len < 1) return -1;
@@ -1904,6 +1925,7 @@ static int superarp_get_param(void *instance, const char *key, char *buf, int bu
     rhy = inst->rhythm_pattern_value[0] ? inst->rhythm_pattern_value : k_default_rhythm_pattern;
     prog_trigger = inst->progression_trigger_mode == TRIG_CONTINUOUS ? "continuous" : "retrigger";
     rhy_trigger = inst->rhythm_trigger_mode == TRIG_CONTINUOUS ? "continuous" : "retrigger";
+    mod_trigger = inst->modifier_trigger_mode == TRIG_CONTINUOUS ? "continuous" : "retrigger";
     if (inst->rate == RATE_1_32) rate = "1/32"; else if (inst->rate == RATE_1_8) rate = "1/8"; else if (inst->rate == RATE_1_4) rate = "1/4";
     if (inst->progression_mode == PROG_DOWN) pm = "down";
     else if (inst->progression_mode == PROG_AS_PLAYED) pm = "as_played";
@@ -1955,6 +1977,7 @@ static int superarp_get_param(void *instance, const char *key, char *buf, int bu
     if (strcmp(key, "velocity_seed") == 0) return snprintf(buf, buf_len, "%d", inst->velocity_seed);
     if (strcmp(key, "gate_random_amount") == 0) return snprintf(buf, buf_len, "%d", inst->gate_random_amount);
     if (strcmp(key, "gate_seed") == 0) return snprintf(buf, buf_len, "%d", inst->gate_seed);
+    if (strcmp(key, "modifier_trigger") == 0) return snprintf(buf, buf_len, "%s", mod_trigger);
     if (strcmp(key, "modifier_loop_length") == 0) return snprintf(buf, buf_len, "%d", inst->modifier_loop_length);
     if (strcmp(key, "random_octave_amount") == 0) return snprintf(buf, buf_len, "%d", inst->random_octave_amount);
     if (strcmp(key, "random_octave_range") == 0) return snprintf(buf, buf_len, "%s", oct_range);
@@ -1973,13 +1996,13 @@ static int superarp_get_param(void *instance, const char *key, char *buf, int bu
             "\"octave_range\":\"%s\",\"progression_mode\":\"%s\",\"progression_seed\":%d,\"progression_trigger\":\"%s\",\"missing_note_policy\":\"%s\","
             "\"pattern_preset\":\"%s\",\"random_pattern_length\":%d,\"random_pattern_chords\":%d,\"random_pattern_chord_seed\":%d,\"rhythm_trigger\":\"%s\",\"rhythm_preset\":\"%s\",\"rhythm_seed\":%d,"
             "\"drop_amount\":%d,\"drop_seed\":%d,\"velocity_random_amount\":%d,\"velocity_seed\":%d,"
-            "\"gate_random_amount\":%d,\"gate_seed\":%d,\"modifier_loop_length\":%d,"
+            "\"gate_random_amount\":%d,\"gate_seed\":%d,\"modifier_trigger\":\"%s\",\"modifier_loop_length\":%d,"
             "\"random_octave_amount\":%d,\"random_octave_range\":\"%s\",\"random_octave_seed\":%d,"
             "\"random_note_amount\":%d,\"random_note_seed\":%d}",
             rate, inst->bpm, triplet, inst->gate, inst->velocity_override, sync, inst->swing, inst->phase_offset, latch, inst->max_voices,
             glob_oct, pm, inst->progression_seed, prog_trigger, miss, pat, inst->random_pattern_length, inst->random_pattern_chords, inst->random_pattern_chord_seed,
             rhy_trigger, rhy, inst->rhythm_seed, inst->drop_amount, inst->drop_seed, inst->velocity_random_amount,
-            inst->velocity_seed, inst->gate_random_amount, inst->gate_seed, inst->modifier_loop_length,
+            inst->velocity_seed, inst->gate_random_amount, inst->gate_seed, mod_trigger, inst->modifier_loop_length,
             inst->random_octave_amount, oct_range, inst->random_octave_seed,
             inst->random_note_amount, inst->random_note_seed
         );

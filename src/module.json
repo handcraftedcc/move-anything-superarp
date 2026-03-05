@@ -37,7 +37,7 @@
         },
         "modifiers": {
           "name": "Modifiers",
-          "params": ["modifier_loop_length", "drop_amount", "drop_seed", "velocity_random_amount", "velocity_seed", "gate_random_amount", "gate_seed", "random_octave_amount", "random_octave_range", "random_octave_seed", "random_note_amount", "random_note_seed"],
+          "params": ["modifier_loop_length", "modifier_trigger", "drop_amount", "drop_seed", "velocity_random_amount", "velocity_seed", "gate_random_amount", "gate_seed", "random_octave_amount", "random_octave_range", "random_octave_seed", "random_note_amount", "random_note_seed"],
           "knobs": ["modifier_loop_length", "drop_amount", "drop_seed", "velocity_random_amount", "gate_random_amount", "random_octave_amount", "random_octave_range", "random_note_amount"]
         }
       }
@@ -71,6 +71,7 @@
     { "key": "gate_random_amount", "name": "Gate Rand", "type": "int", "min": 0, "max": 1600, "step": 1 },
     { "key": "gate_seed", "name": "Gate Seed", "type": "int", "min": 0, "max": 65535, "step": 1 },
     { "key": "modifier_loop_length", "name": "Mod Loop", "type": "int", "min": 0, "max": 128, "step": 1 },
+    { "key": "modifier_trigger", "name": "Trigger", "type": "enum", "options": ["retrigger", "continuous"] },
     { "key": "random_octave_amount", "name": "Oct Rand", "type": "int", "min": 0, "max": 100, "step": 1 },
     { "key": "random_octave_range", "name": "Oct Range", "type": "enum", "options": ["+1", "-1", "+-1", "+2", "-2", "+-2"] },
     { "key": "random_octave_seed", "name": "Oct Seed", "type": "int", "min": 0, "max": 65535, "step": 1 },

@@ -86,6 +86,8 @@
           "lines": [
             "Mod Loop: 0-128",
             "0 means no loop.",
+            "Mod Trig: retrigger",
+            "or continuous.",
             "Drop: 0-100",
             "Vel Rand: 0-127",
             "Gate Rand: 0-1600",

@@ -111,6 +111,7 @@ Modifiers add deterministic variation on top of selected notes. Each modifier ha
 | Parameter | What it does |
 |---------|--------|
 | `modifier_loop_length` (`mod loop`) | Loop length for modifier randomness (`0-128`, `0` = no loop). |
+| `modifier_trigger` (`trigger`) | Sets modifier loop reset policy: `retrigger` or `continuous`. |
 | `drop_amount` (`drop`) | Probability-like amount to skip triggered steps (`0-100`). |
 | `drop_seed` | Seed for drop decisions. |
 | `velocity_random_amount` (`vel rand`) | Randomizes outgoing velocity (`0-127`). |
