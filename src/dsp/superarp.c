@@ -212,13 +212,19 @@ static void cache_chain_params_from_module_json(superarp_instance_t *inst, const
 #if SUPERARP_DEBUG_LOG
 static void dlog(superarp_instance_t *inst, const char *fmt, ...) {
     va_list ap;
+    struct timespec ts;
+    struct tm tmv;
     if (!inst) return;
     if (!inst->debug_fp) {
         inst->debug_fp = fopen(SUPERARP_LOG_PATH, "a");
         if (!inst->debug_fp) return;
         setvbuf(inst->debug_fp, NULL, _IOLBF, 0);
     }
-    fprintf(inst->debug_fp, "[%llu] ", (unsigned long long)inst->debug_seq++);
+    clock_gettime(CLOCK_REALTIME, &ts);
+    localtime_r(&ts.tv_sec, &tmv);
+    fprintf(inst->debug_fp, "%02d:%02d:%02d.%03ld [%llu] ",
+            tmv.tm_hour, tmv.tm_min, tmv.tm_sec, ts.tv_nsec / 1000000L,
+            (unsigned long long)inst->debug_seq++);
     va_start(ap, fmt);
     vfprintf(inst->debug_fp, fmt, ap);
     va_end(ap);
@@ -1652,7 +1658,8 @@ static int superarp_process_midi(void *instance, const uint8_t *in_msg, int in_l
         uint8_t vel = in_msg[2];
         live_before = live_note_count(inst);
         if (type == 0x90 && vel > 0) {
-            dlog(inst, "NOTE_ON note=%u vel=%u cc=%d pending=%d", note, vel, inst->clock_counter, inst->pending_step_triggers);
+            dlog(inst, "NOTE_ON st=0x%02X note=%u vel=%u cc=%d pending=%d live_before=%d",
+                 status, note, vel, inst->clock_counter, inst->pending_step_triggers, live_before);
             note_on(inst, note, vel);
             if (inst->sync_mode == SYNC_CLOCK &&
                 inst->clock_running &&
@@ -1680,7 +1687,8 @@ static int superarp_process_midi(void *instance, const uint8_t *in_msg, int in_l
                 return count;
             }
         } else {
-            dlog(inst, "NOTE_OFF note=%u cc=%d pending=%d", note, inst->clock_counter, inst->pending_step_triggers);
+            dlog(inst, "NOTE_OFF st=0x%02X note=%u cc=%d pending=%d live_before=%d",
+                 status, note, inst->clock_counter, inst->pending_step_triggers, live_before);
             note_off(inst, note);
         }
         return 0;
