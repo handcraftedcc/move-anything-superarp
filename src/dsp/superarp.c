@@ -125,6 +125,9 @@ typedef struct {
     int voice_count;
     int internal_start_grace_armed;
     uint8_t last_input_velocity;
+    uint32_t dbg_no_output_ticks;
+    uint64_t dbg_last_emit_internal_sample_total;
+    uint64_t dbg_last_emit_clock_tick_total;
     FILE *debug_fp;
     uint64_t debug_seq;
 } superarp_instance_t;
@@ -1434,10 +1437,35 @@ static int run_step(superarp_instance_t *inst, uint8_t out_msgs[][3], int out_le
         return 0;
     }
     ok = schedule_notes(inst, final_notes, final_count, vel, gate_pct, out_msgs, out_lens, max_out, &count);
-    if (ok) inst->progression_emit_index++;
-    dlog(inst, "run_step emit=%d note0=%d count=%d vel=%d gate=%d gs=%llu pending=%d",
-         ok ? 1 : 0, final_notes[0], final_count, vel, gate_pct,
-         (unsigned long long)inst->global_step_index, inst->pending_step_triggers);
+    if (ok) {
+        uint64_t gap_samples = 0;
+        uint64_t gap_ticks = 0;
+        if (inst->sync_mode == SYNC_INTERNAL &&
+            inst->dbg_last_emit_internal_sample_total > 0 &&
+            inst->internal_sample_total >= inst->dbg_last_emit_internal_sample_total) {
+            gap_samples = inst->internal_sample_total - inst->dbg_last_emit_internal_sample_total;
+        }
+        if (inst->sync_mode == SYNC_CLOCK &&
+            inst->dbg_last_emit_clock_tick_total > 0 &&
+            inst->clock_tick_total >= inst->dbg_last_emit_clock_tick_total) {
+            gap_ticks = inst->clock_tick_total - inst->dbg_last_emit_clock_tick_total;
+        }
+        dlog(inst, "run_step emit=1 note0=%d count=%d vel=%d gate=%d gs=%llu pending=%d quiet_ticks=%u sample_total=%llu gap_samples=%llu clock_total=%llu gap_ticks=%llu",
+             final_notes[0], final_count, vel, gate_pct,
+             (unsigned long long)inst->global_step_index, inst->pending_step_triggers,
+             inst->dbg_no_output_ticks,
+             (unsigned long long)inst->internal_sample_total,
+             (unsigned long long)gap_samples,
+             (unsigned long long)inst->clock_tick_total,
+             (unsigned long long)gap_ticks);
+        inst->dbg_last_emit_internal_sample_total = inst->internal_sample_total;
+        inst->dbg_last_emit_clock_tick_total = inst->clock_tick_total;
+        inst->progression_emit_index++;
+    } else {
+        dlog(inst, "run_step emit=0 note0=%d count=%d vel=%d gate=%d gs=%llu pending=%d",
+             final_notes[0], final_count, vel, gate_pct,
+             (unsigned long long)inst->global_step_index, inst->pending_step_triggers);
+    }
     advance_step_counters(inst);
     return count;
 }
@@ -1708,9 +1736,15 @@ static int superarp_tick(void *instance, int frames, int sample_rate,
             dlog(inst, "tick drain step done pending=%d out=%d", inst->pending_step_triggers, count);
         }
         if (count == 0) {
-            dlog(inst, "tick no-output sync=clock pending=%d delayed=%d live=%d phrase=%d running=%d",
-                 inst->pending_step_triggers, inst->delayed_step_triggers, live_count,
-                 inst->phrase_running, inst->clock_running);
+            inst->dbg_no_output_ticks++;
+            if (inst->dbg_no_output_ticks == 1 || (inst->dbg_no_output_ticks % 64u) == 0u) {
+                dlog(inst, "tick no-output sync=clock pending=%d delayed=%d live=%d phrase=%d running=%d quiet_ticks=%u",
+                     inst->pending_step_triggers, inst->delayed_step_triggers, live_count,
+                     inst->phrase_running, inst->clock_running, inst->dbg_no_output_ticks);
+            }
+        } else if (inst->dbg_no_output_ticks > 0) {
+            dlog(inst, "tick output-resume sync=clock out=%d quiet_ticks=%u", count, inst->dbg_no_output_ticks);
+            inst->dbg_no_output_ticks = 0;
         }
         return count;
     }
@@ -1723,9 +1757,15 @@ static int superarp_tick(void *instance, int frames, int sample_rate,
         if (inst->samples_until_step_f < 1.0) inst->samples_until_step_f = 1.0;
     }
     if (count == 0) {
-        dlog(inst, "tick no-output sync=internal live=%d phrase=%d grace=%d samples_until=%.2f",
-             live_count, inst->phrase_running, inst->internal_start_grace_armed,
-             inst->samples_until_step_f);
+        inst->dbg_no_output_ticks++;
+        if (inst->dbg_no_output_ticks == 1 || (inst->dbg_no_output_ticks % 64u) == 0u) {
+            dlog(inst, "tick no-output sync=internal live=%d phrase=%d grace=%d samples_until=%.2f quiet_ticks=%u",
+                 live_count, inst->phrase_running, inst->internal_start_grace_armed,
+                 inst->samples_until_step_f, inst->dbg_no_output_ticks);
+        }
+    } else if (inst->dbg_no_output_ticks > 0) {
+        dlog(inst, "tick output-resume sync=internal out=%d quiet_ticks=%u", count, inst->dbg_no_output_ticks);
+        inst->dbg_no_output_ticks = 0;
     }
     inst->samples_until_step = (int)(inst->samples_until_step_f + 0.5);
     if (inst->samples_until_step < 1) inst->samples_until_step = 1;
