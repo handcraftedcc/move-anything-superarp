@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <time.h>
 #include "host/midi_fx_api_v1.h"
 #include "host/plugin_api_v1.h"
 
