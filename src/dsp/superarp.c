@@ -14,7 +14,7 @@
 
 #define MAX_ARP_NOTES 16
 #define DEFAULT_BPM 120
-#define SUPERARP_DEBUG_LOG 0
+#define SUPERARP_DEBUG_LOG 1
 #define SUPERARP_LOG_PATH "/data/UserData/move-anything/superarp.log"
 #define CLOCK_START_GRACE_TICKS 1
 #define CLOCK_ARP_OUTPUT_DELAY_TICKS 1
@@ -23,6 +23,16 @@
 #define PROG_INDEX_MAX 5
 #define MAX_PATTERN_TEXT 96
 #define MAX_VOICES 64
+
+#ifndef MOVE_CLOCK_STATUS_UNAVAILABLE
+#define MOVE_CLOCK_STATUS_UNAVAILABLE 0
+#endif
+#ifndef MOVE_CLOCK_STATUS_STOPPED
+#define MOVE_CLOCK_STATUS_STOPPED 1
+#endif
+#ifndef MOVE_CLOCK_STATUS_RUNNING
+#define MOVE_CLOCK_STATUS_RUNNING 2
+#endif
 
 typedef enum { RATE_1_32 = 0, RATE_1_16, RATE_1_8, RATE_1_4 } rate_t;
 typedef enum {
@@ -122,10 +132,8 @@ typedef struct {
 static const host_api_v1_t *g_host = NULL;
 
 static int superarp_query_clock_status(const superarp_instance_t *inst) {
-    if (g_host && g_host->get_clock_status) {
-        return g_host->get_clock_status();
-    }
-
+    /* Compatibility path: current move-anything host headers in this workspace
+     * do not expose get_clock_status on host_api_v1, so use local clock state. */
     if (inst && inst->clock_running) {
         return MOVE_CLOCK_STATUS_RUNNING;
     }
@@ -1699,6 +1707,11 @@ static int superarp_tick(void *instance, int frames, int sample_rate,
             inst->pending_step_triggers--;
             dlog(inst, "tick drain step done pending=%d out=%d", inst->pending_step_triggers, count);
         }
+        if (count == 0) {
+            dlog(inst, "tick no-output sync=clock pending=%d delayed=%d live=%d phrase=%d running=%d",
+                 inst->pending_step_triggers, inst->delayed_step_triggers, live_count,
+                 inst->phrase_running, inst->clock_running);
+        }
         return count;
     }
 
@@ -1708,6 +1721,11 @@ static int superarp_tick(void *instance, int frames, int sample_rate,
         count += run_step(inst, out_msgs + count, out_lens + count, max_out - count);
         inst->samples_until_step_f += next_step_interval(inst);
         if (inst->samples_until_step_f < 1.0) inst->samples_until_step_f = 1.0;
+    }
+    if (count == 0) {
+        dlog(inst, "tick no-output sync=internal live=%d phrase=%d grace=%d samples_until=%.2f",
+             live_count, inst->phrase_running, inst->internal_start_grace_armed,
+             inst->samples_until_step_f);
     }
     inst->samples_until_step = (int)(inst->samples_until_step_f + 0.5);
     if (inst->samples_until_step < 1) inst->samples_until_step = 1;
